@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fluid Dynamics Cloud Simulation</title>
+    <title>Procedural Sky Cloud Simulation</title>
     <style>
         * {
             margin: 0;
@@ -28,7 +28,7 @@
     <canvas id="simulation-canvas"></canvas>
 
     <script>
-        // --- Day 2: The Geography & Text Vector Layer ---
+        // --- The Geography & Text Vector Layer ---
         const obstacleCanvas = document.createElement('canvas');
         const obCtx = obstacleCanvas.getContext('2d');
         
@@ -66,7 +66,7 @@
         }
         drawObstacles();
 
-        // --- Day 3 & 4: WebGL Fluid Dynamics Pipeline ---
+        // --- WebGL Fluid Dynamics Pipeline ---
         const canvas = document.getElementById('simulation-canvas');
         const gl = canvas.getContext('webgl2');
 
@@ -201,8 +201,9 @@
                 vec2 vel = texture(uVelocity, vUv).xy;
                 vel -= uHalfRdx * vec2(pR - pL, pT - pB);
                 
-                if (vUv.x < 0.02) {
-                    vel = vec2(1.8, (sin(vUv.y * 20.0) * 0.2));
+                // Slow background ambient cross-breeze
+                if (vUv.x < 0.01 || vUv.y < 0.01 || vUv.x > 0.99 || vUv.y > 0.99) {
+                    vel = vec2(0.4, 0.0); 
                 }
 
                 fragColor = vec4(vel, 0.0, 1.0);
@@ -223,7 +224,6 @@
                 
                 vec3 finalColor = mix(skyColor, cloudColor, clamp(density, 0.0, 1.0));
                 
-                // Overlay obstacles faintly so they are visibly interacting
                 float obs = texture(uObstacles, vUv).r;
                 if (obs > 0.5) {
                     finalColor = mix(finalColor, vec3(0.15, 0.2, 0.3), 0.4);
@@ -234,11 +234,33 @@
 
         const injectFs = `#version 300 es
             precision highp float;
+            in vec2 vUv;
             out vec4 fragColor;
-            uniform float uSeedY;
+            uniform float uTime;
+
+            float hash(vec2 p) {
+                return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+            }
+
+            float noise(vec2 p) {
+                vec2 i = floor(p);
+                vec2 f = fract(p);
+                f = f * f * (3.0 - 2.0 * f);
+                return mix(mix(hash(i + vec2(0.0,0.0)), hash(i + vec2(1.0,0.0)), f.x),
+                           mix(hash(i + vec2(0.0,1.0)), hash(i + vec2(1.0,1.0)), f.x), f.y);
+            }
+
             void main() {
-                float val = smoothstep(0.15, 0.0, abs(gl_FragCoord.y/512.0 - uSeedY));
-                fragColor = vec4(val * 0.55, 0.0, 0.0, 1.0);
+                vec2 uv1 = vUv * 5.0 + vec2(uTime * 0.05, 0.0);
+                vec2 uv2 = vUv * 12.0 - vec2(uTime * 0.02, uTime * 0.01);
+                
+                float cloudPattern = noise(uv1) * 0.7 + noise(uv2) * 0.3;
+                float density = smoothstep(0.55, 0.8, cloudPattern);
+                
+                // Keep cloud condensation mainly in the upper sky portions
+                density *= smoothstep(0.0, 0.35, vUv.y);
+                
+                fragColor = vec4(density * 0.08, 0.0, 0.0, 1.0);
             }`;
 
         const buoyancyFs = `#version 300 es
@@ -252,7 +274,7 @@
             void main() {
                 vec2 vel = texture(uVelocity, vUv).xy;
                 float d = texture(uDensity, vUv).r;
-                float lift = d * 5.5; 
+                float lift = d * 1.2; 
                 fragColor = vec4(vel.x, vel.y + (lift * uDt), 0.0, 1.0);
             }`;
 
@@ -350,7 +372,7 @@
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             velocityGrid.swap();
 
-            // PASS B: Advect Density (Evaporate clouds dynamically)
+            // PASS B: Advect Density (Dynamic Evaporation)
             gl.useProgram(advectProg);
             gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 0.993); 
             gl.uniform1i(gl.getUniformLocation(advectProg, "uVelocity"), 0);
@@ -364,21 +386,17 @@
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             densityGrid.swap();
 
-            // PASS B.5: Density Continuous Puff Injection
-            if(Math.random() > 0.05) {
-                gl.bindFramebuffer(gl.FRAMEBUFFER, densityGrid.read.fbo);
-                gl.enable(gl.BLEND);
-                gl.blendFunc(gl.ONE, gl.ONE);
-                
-                gl.useProgram(injectProg);
-                gl.uniform1f(gl.getUniformLocation(injectProg, "uSeedY"), Math.random() * 0.5 + 0.25);
-                
-                gl.viewport(0, 0, 20, SIM_RES); 
-                gl.drawArrays(gl.TRIANGLES, 0, 6);
-                
-                gl.disable(gl.BLEND);
-                gl.viewport(0, 0, SIM_RES, SIM_RES);
-            }
+            // PASS B.5: PROCEDURAL SKY CLOUD CONDENSATION
+            gl.bindFramebuffer(gl.FRAMEBUFFER, densityGrid.read.fbo);
+            gl.viewport(0, 0, SIM_RES, SIM_RES); 
+            gl.enable(gl.BLEND);
+            gl.blendFunc(gl.ONE, gl.ONE);
+            
+            gl.useProgram(injectProg);
+            gl.uniform1f(gl.getUniformLocation(injectProg, "uTime"), performance.now() * 0.001);
+            
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+            gl.disable(gl.BLEND);
 
             // PASS B.7: Apply Thermal Buoyancy Force
             gl.useProgram(buoyancyProg);
@@ -435,7 +453,7 @@
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             velocityGrid.swap();
 
-            // PASS F: Output Output to Viewport Screen
+            // PASS F: Output to Viewport Screen
             gl.viewport(0, 0, canvas.width, canvas.height);
             gl.useProgram(displayProg);
             gl.uniform1i(gl.getUniformLocation(displayProg, "uDensity"), 0);
