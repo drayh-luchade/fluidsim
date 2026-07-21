@@ -3,465 +3,83 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aerodynamic Cloud Text Reveal</title>
+    <title>Fluid Dynamics Cloud Simulation</title>
     <style>
-        body, html {
+        * {
             margin: 0;
             padding: 0;
+            box-sizing: border-box;
+        }
+        body, html {
             width: 100%;
             height: 100%;
             overflow: hidden;
-            background-color: #0b111e;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: #04060b;
         }
-        #simulation-canvas {
+        canvas {
             display: block;
             width: 100vw;
             height: 100vh;
         }
-        #ui-overlay {
-            position: absolute;
-            top: 20px;
-            left: 20px;
-            color: rgba(255, 255, 255, 0.85);
-            background: rgba(15, 23, 42, 0.6);
-            padding: 15px 20px;
-            border-radius: 8px;
-            backdrop-filter: blur(10px);
-            pointer-events: none;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        h1 { margin: 0 0 5px 0; font-size: 1.2rem; font-weight: 600; letter-spacing: 0.05em; }
-        p { margin: 0; font-size: 0.85rem; color: rgba(255, 255, 255, 0.6); }
     </style>
 </head>
 <body>
 
     <canvas id="simulation-canvas"></canvas>
 
-<script>
-    // --- Day 2: The Geography & Text Vector Layer ---
-    const obstacleCanvas = document.createElement('canvas');
-    const obCtx = obstacleCanvas.getContext('2d');
-    
-    const SIM_RES = 512;
-    obstacleCanvas.width = SIM_RES;
-    obstacleCanvas.height = SIM_RES;
+    <script>
+        // --- Day 2: The Geography & Text Vector Layer ---
+        const obstacleCanvas = document.createElement('canvas');
+        const obCtx = obstacleCanvas.getContext('2d');
+        
+        const SIM_RES = 512;
+        obstacleCanvas.width = SIM_RES;
+        obstacleCanvas.height = SIM_RES;
 
-    function drawObstacles() {
-        obCtx.fillStyle = '#000000';
-        obCtx.fillRect(0, 0, SIM_RES, SIM_RES);
+        function drawObstacles() {
+            obCtx.fillStyle = '#000000';
+            obCtx.fillRect(0, 0, SIM_RES, SIM_RES);
 
-        // 1. Draw Geographic Boundary
-        obCtx.strokeStyle = '#ffffff';
-        obCtx.lineWidth = 6;
-        obCtx.fillStyle = 'rgba(255,255,255,0.15)'; 
-        obCtx.beginPath();
-        obCtx.moveTo(100, 50);   
-        obCtx.lineTo(250, 50);   
-        obCtx.lineTo(320, 120);  
-        obCtx.lineTo(420, 150);  
-        obCtx.lineTo(380, 450);  
-        obCtx.lineTo(200, 450);  
-        obCtx.lineTo(200, 200);  
-        obCtx.closePath();
-        obCtx.stroke();
-        obCtx.fill();
+            // 1. Draw Geographic Boundary
+            obCtx.strokeStyle = '#ffffff';
+            obCtx.lineWidth = 6;
+            obCtx.fillStyle = 'rgba(255,255,255,0.15)'; 
+            obCtx.beginPath();
+            obCtx.moveTo(100, 50);   
+            obCtx.lineTo(250, 50);   
+            obCtx.lineTo(320, 120);  
+            obCtx.lineTo(420, 150);  
+            obCtx.lineTo(380, 450);  
+            obCtx.lineTo(200, 450);  
+            obCtx.lineTo(200, 200);  
+            obCtx.closePath();
+            obCtx.stroke();
+            obCtx.fill();
 
-        // 2. Draw Text Pillars
-        obCtx.fillStyle = '#ffffff';
-        obCtx.font = 'bold 55px sans-serif';
-        obCtx.textAlign = 'center';
-        obCtx.textBaseline = 'middle';
-        obCtx.fillText("HIDDEN", SIM_RES * 0.6, SIM_RES * 0.45);
-        obCtx.fillText("TEXT", SIM_RES * 0.6, SIM_RES * 0.58);
-    }
-    drawObstacles();
-
-    // --- Day 3 & 4: WebGL Fluid Dynamics Pipeline ---
-    const canvas = document.getElementById('simulation-canvas');
-    const gl = canvas.getContext('webgl2');
-
-    if (!gl) {
-        alert('WebGL 2 not supported on this device.');
-    }
-
-    function createShader(gl, type, source) {
-        const shader = gl.createShader(type);
-        gl.shaderSource(shader, source);
-        gl.compileShader(shader);
-        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-            console.error("Shader compilation error:", gl.getShaderInfoLog(shader));
-            gl.deleteShader(shader);
-            return null;
+            // 2. Draw Text Pillars
+            obCtx.fillStyle = '#ffffff';
+            obCtx.font = 'bold 55px sans-serif';
+            obCtx.textAlign = 'center';
+            obCtx.textBaseline = 'middle';
+            obCtx.fillText("HIDDEN", SIM_RES * 0.6, SIM_RES * 0.45);
+            obCtx.fillText("TEXT", SIM_RES * 0.6, SIM_RES * 0.58);
         }
-        return shader;
-    }
+        drawObstacles();
 
-    function createProgram(gl, vsSource, fsSource) {
-        const vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
-        const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
-        const program = gl.createProgram();
-        gl.attachShader(program, vs);
-        gl.attachShader(program, fs);
-        gl.linkProgram(program);
-        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-            console.error("Program linking error:", gl.getProgramInfoLog(program));
-            return null;
-        }
-        return program;
-    }
-
-    const vsSource = `#version 300 es
-        in vec2 position;
-        out vec2 vUv;
-        void main() {
-            vUv = position * 0.5 + 0.5;
-            gl_Position = vec4(position, 0.0, 1.0);
-        }`;
-
-    const advectFs = `#version 300 es
-        precision highp float;
-        in vec2 vUv;
-        out vec4 fragColor;
-        uniform sampler2D uVelocity;
-        uniform sampler2D uTarget;
-        uniform sampler2D uObstacles;
-        uniform float uDt;
-        uniform float uRdx;
-        uniform float uDissipation; // <--- New uniform: controls evaporation speed
-        
-        void main() {
-            float obstacle = texture(uObstacles, vUv).r;
-            if (obstacle > 0.5) {
-                fragColor = vec4(0.0);
-                return;
-            }
-            vec2 vel = texture(uVelocity, vUv).xy;
-            vec2 coord = vUv - uDt * uRdx * vel;
-            
-            // Decay the target density field over time
-            fragColor = texture(uTarget, coord) * uDissipation;
-        }`;
-
-    const divergeFs = `#version 300 es
-        precision highp float;
-        in vec2 vUv;
-        out vec4 fragColor;
-        uniform sampler2D uVelocity;
-        uniform sampler2D uObstacles;
-        uniform float uHalfRdx;
-
-        void main() {
-            vec2 wR = texture(uVelocity, vUv + vec2(1.0/512.0, 0.0)).xy;
-            vec2 wL = texture(uVelocity, vUv - vec2(1.0/512.0, 0.0)).xy;
-            vec2 wT = texture(uVelocity, vUv + vec2(0.0, 1.0/512.0)).xy;
-            vec2 wB = texture(uVelocity, vUv - vec2(0.0, 1.0/512.0)).xy;
-
-            if (texture(uObstacles, vUv + vec2(1.0/512.0, 0.0)).r > 0.5) wR = -texture(uVelocity, vUv).xy;
-            if (texture(uObstacles, vUv - vec2(1.0/512.0, 0.0)).r > 0.5) wL = -texture(uVelocity, vUv).xy;
-            if (texture(uObstacles, vUv + vec2(0.0, 1.0/512.0)).r > 0.5) wT = -texture(uVelocity, vUv).xy;
-            if (texture(uObstacles, vUv - vec2(0.0, 1.0/512.0)).r > 0.5) wB = -texture(uVelocity, vUv).xy;
-
-            float div = uHalfRdx * ((wR.x - wL.x) + (wT.y - wB.y));
-            fragColor = vec4(div, 0.0, 0.0, 1.0);
-        }`;
-
-    const pressureFs = `#version 300 es
-        precision highp float;
-        in vec2 vUv;
-        out vec4 fragColor;
-        uniform sampler2D uPressure;
-        uniform sampler2D uDivergence;
-        uniform sampler2D uObstacles;
-
-        void main() {
-            float pR = texture(uPressure, vUv + vec2(1.0/512.0, 0.0)).r;
-            float pL = texture(uPressure, vUv - vec2(1.0/512.0, 0.0)).r;
-            float pT = texture(uPressure, vUv + vec2(0.0, 1.0/512.0)).r;
-            float pB = texture(uPressure, vUv - vec2(0.0, 1.0/512.0)).r;
-            float pC = texture(uPressure, vUv).r;
-
-            if (texture(uObstacles, vUv + vec2(1.0/512.0, 0.0)).r > 0.5) pR = pC;
-            if (texture(uObstacles, vUv - vec2(1.0/512.0, 0.0)).r > 0.5) pL = pC;
-            if (texture(uObstacles, vUv + vec2(0.0, 1.0/512.0)).r > 0.5) pT = pC;
-            if (texture(uObstacles, vUv - vec2(0.0, 1.0/512.0)).r > 0.5) pB = pC;
-
-            float div = texture(uDivergence, vUv).r;
-            float p = (pR + pL + pT + pB - div) * 0.25;
-            fragColor = vec4(p, 0.0, 0.0, 1.0);
-        }`;
-
-    const gradientSubFs = `#version 300 es
-        precision highp float;
-        in vec2 vUv;
-        out vec4 fragColor;
-        uniform sampler2D uVelocity;
-        uniform sampler2D uPressure;
-        uniform sampler2D uObstacles;
-        uniform float uHalfRdx;
-
-        void main() {
-            if (texture(uObstacles, vUv).r > 0.5) {
-                fragColor = vec4(0.0);
-                return;
-            }
-
-            float pR = texture(uPressure, vUv + vec2(1.0/512.0, 0.0)).r;
-            float pL = texture(uPressure, vUv - vec2(1.0/512.0, 0.0)).r;
-            float pT = texture(uPressure, vUv + vec2(0.0, 1.0/512.0)).r;
-            float pB = texture(uPressure, vUv - vec2(0.0, 1.0/512.0)).r;
-
-            vec2 vel = texture(uVelocity, vUv).xy;
-            vel -= uHalfRdx * vec2(pR - pL, pT - pB);
-            
-            if (vUv.x < 0.02) {
-                vel = vec2(1.8, (sin(vUv.y * 20.0) * 0.2));
-            }
-
-            fragColor = vec4(vel, 0.0, 1.0);
-        }`;
-
-    const displayFs = `#version 300 es
-        precision highp float;
-        in vec2 vUv;
-        out vec4 fragColor;
-        uniform sampler2D uDensity;
-        uniform sampler2D uObstacles;
-
-        void main() {
-            float density = texture(uDensity, vUv).r;
-            
-            vec3 skyColor = vec3(0.043, 0.066, 0.117);
-            vec3 cloudColor = vec3(0.85, 0.88, 0.95);
-            
-            vec3 finalColor = mix(skyColor, cloudColor, clamp(density, 0.0, 1.0));
-            fragColor = vec4(finalColor, 1.0);
-        }`;
-
-    // NEW: Injector shader compiled ONCE globally
-    const injectFs = `#version 300 es
-        precision highp float;
-        out vec4 fragColor;
-        uniform float uSeedY;
-        void main() {
-            float val = smoothstep(0.15, 0.0, abs(gl_FragCoord.y/512.0 - uSeedY));
-            fragColor = vec4(val * 0.45, 0.0, 0.0, 1.0);
-        }`;
-
-    const advectProg = createProgram(gl, vsSource, advectFs);
-    const divergeProg = createProgram(gl, vsSource, divergeFs);
-    const pressureProg = createProgram(gl, vsSource, pressureFs);
-    const gradSubProg = createProgram(gl, vsSource, gradientSubFs);
-    const displayProg = createProgram(gl, vsSource, displayFs);
-    const injectProg = createProgram(gl, vsSource, injectFs); // Compiled cleanly once
-
-    // --- Framebuffer Texture Pairs Allocation ---
-    function createDoubleDataTexture() {
-        let textures = [];
-        let fbos = [];
-        for (let i = 0; i < 2; i++) {
-            let tex = gl.createTexture();
-            gl.bindTexture(gl.TEXTURE_2D, tex);
-            gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, SIM_RES, SIM_RES, 0, gl.RGBA, gl.HALF_FLOAT, null);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-            gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-            textures.push(tex);
-
-            let fbo = gl.createFramebuffer();
-            gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
-            gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-            fbos.push(fbo);
-        }
-        return {
-            read: { tex: textures[0], fbo: fbos[0] },
-            write: { tex: textures[1], fbo: fbos[1] },
-            swap() { let tmp = this.read; this.read = this.write; this.write = tmp; }
-        };
-    }
-
-    gl.getExtension('EXT_color_buffer_float');
-    gl.getExtension('OES_texture_half_float_linear');
-
-    const velocityGrid = createDoubleDataTexture();
-    const densityGrid = createDoubleDataTexture();
-    const pressureGrid = createDoubleDataTexture();
-    
-    const divFbo = gl.createFramebuffer();
-    const divTex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, divTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, SIM_RES, SIM_RES, 0, gl.RGBA, gl.HALF_FLOAT, null);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, divFbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, divTex, 0);
-
-    const obstacleTex = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, obstacleTex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, obstacleCanvas);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-
-    const quadVa = gl.createVertexArray();
-    gl.bindVertexArray(quadVa);
-    const quadBuf = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1, 1,-1, -1,1, -1,1, 1,-1, 1,1]), gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-
-    function resize() {
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
-    }
-    window.addEventListener('resize', resize);
-    resize();
-
-    // --- Core Execution Pipeline Loop ---
-    function stepSimulation() {
-        gl.viewport(0, 0, SIM_RES, SIM_RES);
-        gl.bindVertexArray(quadVa);
-
-        // PASS A: Advect Velocity Field (No dissipation for velocity)
-        gl.useProgram(advectProg);
-        gl.uniform1f(gl.getUniformLocation(advectProg, "uDt"), 0.016);
-        gl.uniform1f(gl.getUniformLocation(advectProg, "uRdx"), 1.0);
-        gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 1.0); // Keep velocity moving
-        gl.uniform1i(gl.getUniformLocation(advectProg, "uVelocity"), 0);
-        gl.uniform1i(gl.getUniformLocation(advectProg, "uTarget"), 0);
-        gl.uniform1i(gl.getUniformLocation(advectProg, "uObstacles"), 2);
-        
-        gl.activeTexture(gl.TEXTURE2);
-        gl.bindTexture(gl.TEXTURE_2D, obstacleTex);
-        
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, velocityGrid.write.fbo);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-        velocityGrid.swap();
-    
-        // PASS B: Advect Density (Evaporate clouds slowly)
-        gl.useProgram(advectProg);
-        // 0.992 causes clouds to dissolve cleanly after traveling away from sources
-        gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 0.992); 
-        gl.uniform1i(gl.getUniformLocation(advectProg, "uVelocity"), 0);
-        gl.uniform1i(gl.getUniformLocation(advectProg, "uTarget"), 1);
-        
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, densityGrid.read.tex);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, densityGrid.write.fbo);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-        densityGrid.swap();
-    
-        // PASS B.5: Dynamic Cloud Puff Generation
-        if(Math.random() > 0.05) { // Slightly higher burst rate for clump formation
-            gl.bindFramebuffer(gl.FRAMEBUFFER, densityGrid.read.fbo);
-            gl.enable(gl.BLEND);
-            gl.blendFunc(gl.ONE, gl.ONE);
-            
-            gl.useProgram(injectProg);
-            gl.uniform1f(gl.getUniformLocation(injectProg, "uSeedY"), Math.random() * 0.4 + 0.1); // Keep it lower on screen
-            
-            gl.viewport(0, 0, 15, SIM_RES); 
-            gl.drawArrays(gl.TRIANGLES, 0, 6);
-            
-            gl.disable(gl.BLEND);
-            gl.viewport(0, 0, SIM_RES, SIM_RES);
-        }
-    
-        // NEW PASS B.7: Thermal Buoyancy Force Loop
-        gl.useProgram(buoyancyProg);
-        gl.uniform1f(gl.getUniformLocation(buoyancyProg, "uDt"), 0.016);
-        gl.uniform1i(gl.getUniformLocation(buoyancyProg, "uVelocity"), 0);
-        gl.uniform1i(gl.getUniformLocation(buoyancyProg, "uDensity"), 1);
-        
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, densityGrid.read.tex);
-        
-        gl.bindFramebuffer(gl.FRAMEBUFFER, velocityGrid.write.fbo);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-        velocityGrid.swap();
-
-        // PASS C: Compute Velocity Field Divergence
-        gl.useProgram(divergeProg);
-        gl.uniform1f(gl.getUniformLocation(divergeProg, "uHalfRdx"), 0.5);
-        gl.uniform1i(gl.getUniformLocation(divergeProg, "uVelocity"), 0);
-        gl.uniform1i(gl.getUniformLocation(divergeProg, "uObstacles"), 2);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, divFbo);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-
-        // PASS D: Solve Fluid Pressure Field (Jacobi Loop)
-        gl.useProgram(pressureProg);
-        gl.uniform1i(gl.getUniformLocation(pressureProg, "uDivergence"), 3);
-        gl.uniform1i(gl.getUniformLocation(pressureProg, "uObstacles"), 2);
-        gl.activeTexture(gl.TEXTURE3);
-        gl.bindTexture(gl.TEXTURE_2D, divTex);
-        
-        for (let i = 0; i < 24; i++) { 
-            gl.uniform1i(gl.getUniformLocation(pressureProg, "uPressure"), 0);
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, pressureGrid.read.tex);
-            gl.bindFramebuffer(gl.FRAMEBUFFER, pressureGrid.write.fbo);
-            gl.drawArrays(gl.TRIANGLES, 0, 6);
-            pressureGrid.swap();
-        }
-
-        // PASS E: Subtract Pressure Gradient
-        gl.useProgram(gradSubProg);
-        gl.uniform1f(gl.getUniformLocation(gradSubProg, "uHalfRdx"), 0.5);
-        gl.uniform1i(gl.getUniformLocation(gradSubProg, "uVelocity"), 0);
-        gl.uniform1i(gl.getUniformLocation(gradSubProg, "uPressure"), 1);
-        gl.uniform1i(gl.getUniformLocation(gradSubProg, "uObstacles"), 2);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
-        gl.activeTexture(gl.TEXTURE1);
-        gl.bindTexture(gl.TEXTURE_2D, pressureGrid.read.tex);
-        gl.bindFramebuffer(gl.FRAMEBUFFER, velocityGrid.write.fbo);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-        velocityGrid.swap();
-
-        // PASS F: Output Output to Viewport Screen
-        gl.viewport(0, 0, canvas.width, canvas.height);
-        gl.useProgram(displayProg);
-        gl.uniform1i(gl.getUniformLocation(displayProg, "uDensity"), 0);
-        gl.uniform1i(gl.getUniformLocation(displayProg, "uObstacles"), 2);
-        gl.activeTexture(gl.TEXTURE0);
-        gl.bindTexture(gl.TEXTURE_2D, densityGrid.read.tex);
-        
-        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-
-        requestAnimationFrame(stepSimulation);
-    }
-
-    setTimeout(() => {
-        requestAnimationFrame(stepSimulation);
-    }, 100);
-</script>
-
-// --- Day 3 & 4: WebGL Fluid Dynamics Pipeline ---
+        // --- Day 3 & 4: WebGL Fluid Dynamics Pipeline ---
         const canvas = document.getElementById('simulation-canvas');
         const gl = canvas.getContext('webgl2');
 
         if (!gl) {
-            console.error('WebGL 2 not supported on this device.');
+            alert('WebGL 2 not supported on this device.');
         }
 
-        // 1. Compile Shader Boilerplate
         function createShader(gl, type, source) {
             const shader = gl.createShader(type);
             gl.shaderSource(shader, source);
             gl.compileShader(shader);
             if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-                console.error(gl.getShaderInfoLog(shader));
+                console.error("Shader compilation error:", gl.getShaderInfoLog(shader));
                 gl.deleteShader(shader);
                 return null;
             }
@@ -475,6 +93,10 @@
             gl.attachShader(program, vs);
             gl.attachShader(program, fs);
             gl.linkProgram(program);
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                console.error("Program linking error:", gl.getProgramInfoLog(program));
+                return null;
+            }
             return program;
         }
 
@@ -486,8 +108,6 @@
                 gl_Position = vec4(position, 0.0, 1.0);
             }`;
 
-        // 2. The Math Pass: Advection & Obstacle Shearing
-        // This moves fluid density and velocity across the screen while bending around the white pixels in our obstacle texture
         const advectFs = `#version 300 es
             precision highp float;
             in vec2 vUv;
@@ -497,24 +117,19 @@
             uniform sampler2D uObstacles;
             uniform float uDt;
             uniform float uRdx;
+            uniform float uDissipation;
 
             void main() {
-                // Read obstacle grid: white = solid structural pillar
                 float obstacle = texture(uObstacles, vUv).r;
                 if (obstacle > 0.5) {
-                    fragColor = vec4(0.0);
+                    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
                     return;
                 }
-
-                // Trace backward in time along the velocity vectors (Semi-Lagrangian)
                 vec2 vel = texture(uVelocity, vUv).xy;
                 vec2 coord = vUv - uDt * uRdx * vel;
-                
-                // Sample the fluid quantity at that backward position
-                fragColor = texture(uTarget, coord);
+                fragColor = texture(uTarget, coord) * uDissipation;
             }`;
 
-        // 3. The Math Pass: Jacobi Divergence (Enforcing Incompressibility)
         const divergeFs = `#version 300 es
             precision highp float;
             in vec2 vUv;
@@ -529,7 +144,6 @@
                 vec2 wT = texture(uVelocity, vUv + vec2(0.0, 1.0/512.0)).xy;
                 vec2 wB = texture(uVelocity, vUv - vec2(0.0, 1.0/512.0)).xy;
 
-                // Handle obstacle boundary adjustments inside fluid grid
                 if (texture(uObstacles, vUv + vec2(1.0/512.0, 0.0)).r > 0.5) wR = -texture(uVelocity, vUv).xy;
                 if (texture(uObstacles, vUv - vec2(1.0/512.0, 0.0)).r > 0.5) wL = -texture(uVelocity, vUv).xy;
                 if (texture(uObstacles, vUv + vec2(0.0, 1.0/512.0)).r > 0.5) wT = -texture(uVelocity, vUv).xy;
@@ -539,7 +153,6 @@
                 fragColor = vec4(div, 0.0, 0.0, 1.0);
             }`;
 
-        // 4. The Math Pass: Pressure Correction Poisson Solver
         const pressureFs = `#version 300 es
             precision highp float;
             in vec2 vUv;
@@ -555,7 +168,6 @@
                 float pB = texture(uPressure, vUv - vec2(0.0, 1.0/512.0)).r;
                 float pC = texture(uPressure, vUv).r;
 
-                // Adjust for obstacle cell walls
                 if (texture(uObstacles, vUv + vec2(1.0/512.0, 0.0)).r > 0.5) pR = pC;
                 if (texture(uObstacles, vUv - vec2(1.0/512.0, 0.0)).r > 0.5) pL = pC;
                 if (texture(uObstacles, vUv + vec2(0.0, 1.0/512.0)).r > 0.5) pT = pC;
@@ -566,7 +178,6 @@
                 fragColor = vec4(p, 0.0, 0.0, 1.0);
             }`;
 
-        // 5. The Math Pass: Gradient Subtraction (Subtracting pressure from velocity field)
         const gradientSubFs = `#version 300 es
             precision highp float;
             in vec2 vUv;
@@ -578,7 +189,7 @@
 
             void main() {
                 if (texture(uObstacles, vUv).r > 0.5) {
-                    fragColor = vec4(0.0);
+                    fragColor = vec4(0.0, 0.0, 0.0, 1.0);
                     return;
                 }
 
@@ -590,7 +201,6 @@
                 vec2 vel = texture(uVelocity, vUv).xy;
                 vel -= uHalfRdx * vec2(pR - pL, pT - pB);
                 
-                // Continuous uniform wind blowing from West to East injection
                 if (vUv.x < 0.02) {
                     vel = vec2(1.8, (sin(vUv.y * 20.0) * 0.2));
                 }
@@ -598,7 +208,6 @@
                 fragColor = vec4(vel, 0.0, 1.0);
             }`;
 
-        // 6. Display Render Pass: Drawing the cloud mist density onto the viewport screen
         const displayFs = `#version 300 es
             precision highp float;
             in vec2 vUv;
@@ -608,26 +217,54 @@
 
             void main() {
                 float density = texture(uDensity, vUv).r;
-                float obs = texture(uObstacles, vUv).r;
                 
-                // Make background dark blue, cloud fluid a glowing white/soft grey mist
                 vec3 skyColor = vec3(0.043, 0.066, 0.117);
                 vec3 cloudColor = vec3(0.85, 0.88, 0.95);
                 
-                // Mix sky color with clouds based on calculated density
                 vec3 finalColor = mix(skyColor, cloudColor, clamp(density, 0.0, 1.0));
+                
+                // Overlay obstacles faintly so they are visibly interacting
+                float obs = texture(uObstacles, vUv).r;
+                if (obs > 0.5) {
+                    finalColor = mix(finalColor, vec3(0.15, 0.2, 0.3), 0.4);
+                }
                 
                 fragColor = vec4(finalColor, 1.0);
             }`;
 
-        // Compile all individual shader pipeline blocks
+        const injectFs = `#version 300 es
+            precision highp float;
+            out vec4 fragColor;
+            uniform float uSeedY;
+            void main() {
+                float val = smoothstep(0.15, 0.0, abs(gl_FragCoord.y/512.0 - uSeedY));
+                fragColor = vec4(val * 0.55, 0.0, 0.0, 1.0);
+            }`;
+
+        const buoyancyFs = `#version 300 es
+            precision highp float;
+            in vec2 vUv;
+            out vec4 fragColor;
+            uniform sampler2D uVelocity;
+            uniform sampler2D uDensity;
+            uniform float uDt;
+            
+            void main() {
+                vec2 vel = texture(uVelocity, vUv).xy;
+                float d = texture(uDensity, vUv).r;
+                float lift = d * 5.5; 
+                fragColor = vec4(vel.x, vel.y + (lift * uDt), 0.0, 1.0);
+            }`;
+
         const advectProg = createProgram(gl, vsSource, advectFs);
         const divergeProg = createProgram(gl, vsSource, divergeFs);
         const pressureProg = createProgram(gl, vsSource, pressureFs);
         const gradSubProg = createProgram(gl, vsSource, gradientSubFs);
         const displayProg = createProgram(gl, vsSource, displayFs);
+        const injectProg = createProgram(gl, vsSource, injectFs);
+        const buoyancyProg = createProgram(gl, vsSource, buoyancyFs);
 
-        // --- WebGL Engine Framebuffer Texture Pair Allocations ---
+        // --- Framebuffer Texture Pairs Allocation ---
         function createDoubleDataTexture() {
             let textures = [];
             let fbos = [];
@@ -660,7 +297,6 @@
         const densityGrid = createDoubleDataTexture();
         const pressureGrid = createDoubleDataTexture();
         
-        // Single static buffer for calculated divergence
         const divFbo = gl.createFramebuffer();
         const divTex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, divTex);
@@ -670,14 +306,12 @@
         gl.bindFramebuffer(gl.FRAMEBUFFER, divFbo);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, divTex, 0);
 
-        // Convert our invisible Canvas Obstacle Layer into an official GPU data texture
         const obstacleTex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, obstacleTex);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, obstacleCanvas);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
-        // Define a simple 2D clip space quad layout to render shaders across
         const quadVa = gl.createVertexArray();
         gl.bindVertexArray(quadVa);
         const quadBuf = gl.createBuffer();
@@ -693,9 +327,7 @@
         window.addEventListener('resize', resize);
         resize();
 
-        let lastTime = performance.now();
-
-        // 7. Core Execution Pipeline Loop
+        // --- Core Execution Pipeline Loop ---
         function stepSimulation() {
             gl.viewport(0, 0, SIM_RES, SIM_RES);
             gl.bindVertexArray(quadVa);
@@ -704,6 +336,7 @@
             gl.useProgram(advectProg);
             gl.uniform1f(gl.getUniformLocation(advectProg, "uDt"), 0.016);
             gl.uniform1f(gl.getUniformLocation(advectProg, "uRdx"), 1.0);
+            gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 1.0); 
             gl.uniform1i(gl.getUniformLocation(advectProg, "uVelocity"), 0);
             gl.uniform1i(gl.getUniformLocation(advectProg, "uTarget"), 0);
             gl.uniform1i(gl.getUniformLocation(advectProg, "uObstacles"), 2);
@@ -717,10 +350,12 @@
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             velocityGrid.swap();
 
-            // PASS B: Advect Density (Cloud ink particles)
+            // PASS B: Advect Density (Evaporate clouds dynamically)
             gl.useProgram(advectProg);
+            gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 0.993); 
             gl.uniform1i(gl.getUniformLocation(advectProg, "uVelocity"), 0);
             gl.uniform1i(gl.getUniformLocation(advectProg, "uTarget"), 1);
+            
             gl.activeTexture(gl.TEXTURE0);
             gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
             gl.activeTexture(gl.TEXTURE1);
@@ -729,26 +364,36 @@
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             densityGrid.swap();
 
-            // Continuous Random Weather Front Density Injection on West boundary
-            gl.bindFramebuffer(gl.FRAMEBUFFER, densityGrid.read.fbo);
-            gl.enable(gl.BLEND);
-            gl.blendFunc(gl.ONE, gl.ONE);
-            
-            // Periodically seed randomized mist fronts rolling past
-            if(Math.random() > 0.1) {
-                gl.useProgram(createProgram(gl, vsSource, `#version 300 es
-                    precision highp float;
-                    out vec4 fragColor;
-                    void main() {
-                        // Spawns randomized horizontal bands of mist clumps on the left boundary
-                        float val = smoothstep(0.15, 0.0, abs(gl_FragCoord.y/512.0 - ${Math.random()}));
-                        fragColor = vec4(val * 0.45, 0.0, 0.0, 1.0);
-                    }`));
-                gl.viewport(0, 0, 25, SIM_RES); // Only write to the left margin line strip
+            // PASS B.5: Density Continuous Puff Injection
+            if(Math.random() > 0.05) {
+                gl.bindFramebuffer(gl.FRAMEBUFFER, densityGrid.read.fbo);
+                gl.enable(gl.BLEND);
+                gl.blendFunc(gl.ONE, gl.ONE);
+                
+                gl.useProgram(injectProg);
+                gl.uniform1f(gl.getUniformLocation(injectProg, "uSeedY"), Math.random() * 0.5 + 0.25);
+                
+                gl.viewport(0, 0, 20, SIM_RES); 
                 gl.drawArrays(gl.TRIANGLES, 0, 6);
+                
+                gl.disable(gl.BLEND);
+                gl.viewport(0, 0, SIM_RES, SIM_RES);
             }
-            gl.disable(gl.BLEND);
-            gl.viewport(0, 0, SIM_RES, SIM_RES);
+
+            // PASS B.7: Apply Thermal Buoyancy Force
+            gl.useProgram(buoyancyProg);
+            gl.uniform1f(gl.getUniformLocation(buoyancyProg, "uDt"), 0.016);
+            gl.uniform1i(gl.getUniformLocation(buoyancyProg, "uVelocity"), 0);
+            gl.uniform1i(gl.getUniformLocation(buoyancyProg, "uDensity"), 1);
+            
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
+            gl.activeTexture(gl.TEXTURE1);
+            gl.bindTexture(gl.TEXTURE_2D, densityGrid.read.tex);
+            
+            gl.bindFramebuffer(gl.FRAMEBUFFER, velocityGrid.write.fbo);
+            gl.drawArrays(gl.TRIANGLES, 0, 6);
+            velocityGrid.swap();
 
             // PASS C: Compute Velocity Field Divergence
             gl.useProgram(divergeProg);
@@ -760,14 +405,14 @@
             gl.bindFramebuffer(gl.FRAMEBUFFER, divFbo);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-            // PASS D: Solve Fluid Pressure Field (Iterative Jacobi Loop)
+            // PASS D: Solve Fluid Pressure Field (Jacobi Loop)
             gl.useProgram(pressureProg);
             gl.uniform1i(gl.getUniformLocation(pressureProg, "uDivergence"), 3);
             gl.uniform1i(gl.getUniformLocation(pressureProg, "uObstacles"), 2);
             gl.activeTexture(gl.TEXTURE3);
             gl.bindTexture(gl.TEXTURE_2D, divTex);
             
-            for (let i = 0; i < 24; i++) { // 24 iterations ensures tight pressure propagation contours
+            for (let i = 0; i < 24; i++) { 
                 gl.uniform1i(gl.getUniformLocation(pressureProg, "uPressure"), 0);
                 gl.activeTexture(gl.TEXTURE0);
                 gl.bindTexture(gl.TEXTURE_2D, pressureGrid.read.tex);
@@ -776,7 +421,7 @@
                 pressureGrid.swap();
             }
 
-            // PASS E: Subtract Pressure Gradient to correct Fluid Velocity velocities
+            // PASS E: Subtract Pressure Gradient
             gl.useProgram(gradSubProg);
             gl.uniform1f(gl.getUniformLocation(gradSubProg, "uHalfRdx"), 0.5);
             gl.uniform1i(gl.getUniformLocation(gradSubProg, "uVelocity"), 0);
@@ -790,7 +435,7 @@
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             velocityGrid.swap();
 
-            // PASS F: Output the final composite density values to the screen canvas viewport
+            // PASS F: Output Output to Viewport Screen
             gl.viewport(0, 0, canvas.width, canvas.height);
             gl.useProgram(displayProg);
             gl.uniform1i(gl.getUniformLocation(displayProg, "uDensity"), 0);
@@ -804,8 +449,9 @@
             requestAnimationFrame(stepSimulation);
         }
 
-        // Delay loop start briefly to ensure data frames attach smoothly
         setTimeout(() => {
             requestAnimationFrame(stepSimulation);
         }, 100);
+    </script>
+</body>
 </html>
