@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dynamic Natural Cloud Atmosphere</title>
+    <title>Volumetric Stratus Cloud Simulation</title>
     <style>
         * {
             margin: 0;
@@ -14,7 +14,7 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
-            background-color: #04060b;
+            background-color: #060913;
         }
         canvas {
             display: block;
@@ -43,7 +43,7 @@
             // 1. Draw Geographic Boundary
             obCtx.strokeStyle = '#ffffff';
             obCtx.lineWidth = 6;
-            obCtx.fillStyle = 'rgba(255,255,255,0.15)'; 
+            obCtx.fillStyle = 'rgba(255,255,255,0.1)'; 
             obCtx.beginPath();
             obCtx.moveTo(100, 50);   
             obCtx.lineTo(250, 50);   
@@ -66,12 +66,11 @@
         }
         drawObstacles();
 
-        // --- WebGL Fluid Dynamics Pipeline ---
         const canvas = document.getElementById('simulation-canvas');
         const gl = canvas.getContext('webgl2');
 
         if (!gl) {
-            alert('WebGL 2 not supported on this device.');
+            alert('WebGL 2 not supported.');
         }
 
         function createShader(gl, type, source) {
@@ -79,24 +78,17 @@
             gl.shaderSource(shader, source);
             gl.compileShader(shader);
             if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-                console.error("Shader compilation error:", gl.getShaderInfoLog(shader));
-                gl.deleteShader(shader);
+                console.error(gl.getShaderInfoLog(shader));
                 return null;
             }
             return shader;
         }
 
         function createProgram(gl, vsSource, fsSource) {
-            const vs = createShader(gl, gl.VERTEX_SHADER, vsSource);
-            const fs = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
             const program = gl.createProgram();
-            gl.attachShader(program, vs);
-            gl.attachShader(program, fs);
+            gl.attachShader(program, createShader(gl, gl.VERTEX_SHADER, vsSource));
+            gl.attachShader(program, createShader(gl, gl.FRAGMENT_SHADER, fsSource));
             gl.linkProgram(program);
-            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-                console.error("Program linking error:", gl.getProgramInfoLog(program));
-                return null;
-            }
             return program;
         }
 
@@ -120,8 +112,7 @@
             uniform float uDissipation;
 
             void main() {
-                float obstacle = texture(uObstacles, vUv).r;
-                if (obstacle > 0.5) {
+                if (texture(uObstacles, vUv).r > 0.5) {
                     fragColor = vec4(0.0, 0.0, 0.0, 1.0);
                     return;
                 }
@@ -201,14 +192,16 @@
                 vec2 vel = texture(uVelocity, vUv).xy;
                 vel -= uHalfRdx * vec2(pR - pL, pT - pB);
                 
-                // Keep an ambient constant baseline breeze moving from left to right globally
+                // Wind Shearing: Higher altitudes move faster, stretching clusters out into wispy strands
                 if (vUv.x < 0.01 || vUv.y < 0.01 || vUv.x > 0.99 || vUv.y > 0.99) {
-                    vel = vec2(0.6, 0.05); 
+                    float windLayer = mix(0.12, 0.38, vUv.y); 
+                    vel = vec2(windLayer, 0.01); 
                 }
 
                 fragColor = vec4(vel, 0.0, 1.0);
             }`;
 
+        // Volumetric Rendering Shader with internal shadowing effects based on density derivative
         const displayFs = `#version 300 es
             precision highp float;
             in vec2 vUv;
@@ -217,22 +210,30 @@
             uniform sampler2D uObstacles;
 
             void main() {
-                float density = texture(uDensity, vUv).r;
+                float dC = texture(uDensity, vUv).r;
                 
-                vec3 skyColor = vec3(0.043, 0.066, 0.117);
-                vec3 cloudColor = vec3(0.85, 0.88, 0.95);
+                // Deep directional shadow approximation (looks at a step toward a simulated light source)
+                float dW = texture(uDensity, vUv + vec2(-2.0/512.0, 2.0/512.0)).r;
+                float shadow = clamp(1.0 - (dW - dC) * 3.5, 0.3, 1.0);
                 
-                vec3 finalColor = mix(skyColor, cloudColor, clamp(density, 0.0, 1.0));
+                vec3 skyColor = vec3(0.03, 0.05, 0.12);
+                
+                // Hybrid multi-tone cloud gradient (pure white tops, heavy grey underbellies)
+                vec3 cloudBase = vec3(0.55, 0.58, 0.65) * shadow;
+                vec3 cloudTop = vec3(0.96, 0.97, 1.0);
+                vec3 cloudColor = mix(cloudBase, cloudTop, smoothstep(0.1, 0.8, dC));
+                
+                vec3 finalColor = mix(skyColor, cloudColor, smoothstep(0.02, 0.9, dC));
                 
                 float obs = texture(uObstacles, vUv).r;
                 if (obs > 0.5) {
-                    finalColor = mix(finalColor, vec3(0.15, 0.2, 0.3), 0.4);
+                    finalColor = mix(finalColor, vec3(0.1, 0.13, 0.22), 0.5);
                 }
                 
                 fragColor = vec4(finalColor, 1.0);
             }`;
 
-        // Localized point-injection shader for generating isolated atmospheric clusters
+        // Injector that sprays jagged, multiscale clusters instead of circles
         const injectFs = `#version 300 es
             precision highp float;
             in vec2 vUv;
@@ -240,11 +241,36 @@
             uniform vec2 uPointCenter;
             uniform float uPointRadius;
             uniform float uPointStrength;
+            uniform float uSeedTime;
+
+            float hash(vec2 p) {
+                return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+            }
+            float noise(vec2 p) {
+                vec2 i = floor(p); vec2 f = fract(p);
+                f = f*f*(3.0-2.0*f);
+                return mix(mix(hash(i+vec2(0,0)), hash(i+vec2(1,0)), f.x),
+                           mix(hash(i+vec2(0,1)), hash(i+vec2(1,1)), f.x), f.y);
+            }
+            // Fractal Brownian Motion creates structural wisps and depth channels instantly
+            float fbm(vec2 p) {
+                float v = 0.0; float a = 0.5;
+                for (int i = 0; i < 3; i++) {
+                    v += a * noise(p); p *= 2.3; a *= 0.5;
+                }
+                return v;
+            }
 
             void main() {
                 float dist = length(vUv - uPointCenter);
-                float val = smoothstep(uPointRadius, 0.0, dist);
-                fragColor = vec4(val * uPointStrength, 0.0, 0.0, 1.0);
+                if(dist > uPointRadius * 1.5) { discard; }
+                
+                // Distort the space with noise before calculating injection shapes
+                vec2 textureCoords = vUv * 25.0 + vec2(uSeedTime, -uSeedTime * 0.3);
+                float structure = fbm(textureCoords);
+                
+                float mask = smoothstep(uPointRadius, 0.0, dist + structure * 0.04);
+                fragColor = vec4(mask * uPointStrength * (0.4 + structure * 0.6), 0.0, 0.0, 1.0);
             }`;
 
         const buoyancyFs = `#version 300 es
@@ -258,7 +284,7 @@
             void main() {
                 vec2 vel = texture(uVelocity, vUv).xy;
                 float d = texture(uDensity, vUv).r;
-                float lift = d * 1.4; 
+                float lift = d * 0.5; // Subtle buoyancy preserves long, cohesive weather systems
                 fragColor = vec4(vel.x, vel.y + (lift * uDt), 0.0, 1.0);
             }`;
 
@@ -270,13 +296,10 @@
         const injectProg = createProgram(gl, vsSource, injectFs);
         const buoyancyProg = createProgram(gl, vsSource, buoyancyFs);
 
-        // --- Framebuffer Texture Pairs Allocation ---
         function createDoubleDataTexture() {
-            let textures = [];
-            let fbos = [];
+            let textures = []; let fbos = [];
             for (let i = 0; i < 2; i++) {
                 let tex = gl.createTexture();
-                gl.createTexture();
                 gl.bindTexture(gl.TEXTURE_2D, tex);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, SIM_RES, SIM_RES, 0, gl.RGBA, gl.HALF_FLOAT, null);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -284,7 +307,6 @@
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
                 textures.push(tex);
-
                 let fbo = gl.createFramebuffer();
                 gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
                 gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
@@ -308,8 +330,6 @@
         const divTex = gl.createTexture();
         gl.bindTexture(gl.TEXTURE_2D, divTex);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, SIM_RES, SIM_RES, 0, gl.RGBA, gl.HALF_FLOAT, null);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
         gl.bindFramebuffer(gl.FRAMEBUFFER, divFbo);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, divTex, 0);
 
@@ -317,7 +337,6 @@
         gl.bindTexture(gl.TEXTURE_2D, obstacleTex);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, obstacleCanvas);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
         const quadVa = gl.createVertexArray();
         gl.bindVertexArray(quadVa);
@@ -334,7 +353,6 @@
         window.addEventListener('resize', resize);
         resize();
 
-        // --- Core Execution Pipeline Loop ---
         function stepSimulation() {
             gl.viewport(0, 0, SIM_RES, SIM_RES);
             gl.bindVertexArray(quadVa);
@@ -343,52 +361,45 @@
             gl.useProgram(advectProg);
             gl.uniform1f(gl.getUniformLocation(advectProg, "uDt"), 0.016);
             gl.uniform1f(gl.getUniformLocation(advectProg, "uRdx"), 1.0);
-            gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 0.998); // Tiny velocity drag
+            gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 0.999); 
             gl.uniform1i(gl.getUniformLocation(advectProg, "uVelocity"), 0);
             gl.uniform1i(gl.getUniformLocation(advectProg, "uTarget"), 0);
             gl.uniform1i(gl.getUniformLocation(advectProg, "uObstacles"), 2);
-            
-            gl.activeTexture(gl.TEXTURE2);
-            gl.bindTexture(gl.TEXTURE_2D, obstacleTex);
-            
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
+            gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, obstacleTex);
+            gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
             gl.bindFramebuffer(gl.FRAMEBUFFER, velocityGrid.write.fbo);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             velocityGrid.swap();
 
-            // PASS B: Advect Density (Evaporation framework)
+            // PASS B: Advect Density (Slower, highly persistent decay to form cloud trails)
             gl.useProgram(advectProg);
-            gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 0.991); // Clouds dissolve beautifully over time
+            gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 0.9975); 
             gl.uniform1i(gl.getUniformLocation(advectProg, "uVelocity"), 0);
             gl.uniform1i(gl.getUniformLocation(advectProg, "uTarget"), 1);
-            
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
-            gl.activeTexture(gl.TEXTURE1);
-            gl.bindTexture(gl.TEXTURE_2D, densityGrid.read.tex);
+            gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
+            gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, densityGrid.read.tex);
             gl.bindFramebuffer(gl.FRAMEBUFFER, densityGrid.write.fbo);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             densityGrid.swap();
 
-            // PASS B.5: RANDOM SPATIAL ATMOSPHERIC CONDENSATION
-            // Instead of full-screen static noise, drop dynamic clusters at random frame beats
-            if (Math.random() > 0.88) {
+            // PASS B.5: FRACTAL BROWNIAN MOTION ATMO INJECTION
+            // Fires more frequently but leaves textured, low-density seed trails
+            if (Math.random() > 0.72) {
                 gl.bindFramebuffer(gl.FRAMEBUFFER, densityGrid.read.fbo);
                 gl.enable(gl.BLEND);
                 gl.blendFunc(gl.ONE, gl.ONE);
-                
                 gl.useProgram(injectProg);
                 
-                // Choose an un-orchestrated spot anywhere in the upper portion of the canvas
-                const randX = Math.random() * 0.9 + 0.05;
-                const randY = Math.random() * 0.5 + 0.35;
-                const randRadius = Math.random() * 0.08 + 0.04;
-                const randStrength = Math.random() * 0.3 + 0.15;
+                // Spawn primarily along the left 30% margin to allow full-screen texturing under wind-shear
+                const randX = Math.random() * 0.35;
+                const randY = Math.random() * 0.6 + 0.3;
+                const randRadius = Math.random() * 0.12 + 0.08;
+                const randStrength = Math.random() * 0.2 + 0.1;
 
                 gl.uniform2f(gl.getUniformLocation(injectProg, "uPointCenter"), randX, randY);
                 gl.uniform1f(gl.getUniformLocation(injectProg, "uPointRadius"), randRadius);
                 gl.uniform1f(gl.getUniformLocation(injectProg, "uPointStrength"), randStrength);
+                gl.uniform1f(gl.getUniformLocation(injectProg, "uSeedTime"), performance.now() * 0.0005);
                 
                 gl.drawArrays(gl.TRIANGLES, 0, 6);
                 gl.disable(gl.BLEND);
@@ -399,12 +410,8 @@
             gl.uniform1f(gl.getUniformLocation(buoyancyProg, "uDt"), 0.016);
             gl.uniform1i(gl.getUniformLocation(buoyancyProg, "uVelocity"), 0);
             gl.uniform1i(gl.getUniformLocation(buoyancyProg, "uDensity"), 1);
-            
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
-            gl.activeTexture(gl.TEXTURE1);
-            gl.bindTexture(gl.TEXTURE_2D, densityGrid.read.tex);
-            
+            gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
+            gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, densityGrid.read.tex);
             gl.bindFramebuffer(gl.FRAMEBUFFER, velocityGrid.write.fbo);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             velocityGrid.swap();
@@ -414,8 +421,7 @@
             gl.uniform1f(gl.getUniformLocation(divergeProg, "uHalfRdx"), 0.5);
             gl.uniform1i(gl.getUniformLocation(divergeProg, "uVelocity"), 0);
             gl.uniform1i(gl.getUniformLocation(divergeProg, "uObstacles"), 2);
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
+            gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
             gl.bindFramebuffer(gl.FRAMEBUFFER, divFbo);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
 
@@ -423,13 +429,10 @@
             gl.useProgram(pressureProg);
             gl.uniform1i(gl.getUniformLocation(pressureProg, "uDivergence"), 3);
             gl.uniform1i(gl.getUniformLocation(pressureProg, "uObstacles"), 2);
-            gl.activeTexture(gl.TEXTURE3);
-            gl.bindTexture(gl.TEXTURE_2D, divTex);
-            
+            gl.activeTexture(gl.TEXTURE3); gl.bindTexture(gl.TEXTURE_2D, divTex);
             for (let i = 0; i < 20; i++) { 
                 gl.uniform1i(gl.getUniformLocation(pressureProg, "uPressure"), 0);
-                gl.activeTexture(gl.TEXTURE0);
-                gl.bindTexture(gl.TEXTURE_2D, pressureGrid.read.tex);
+                gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, pressureGrid.read.tex);
                 gl.bindFramebuffer(gl.FRAMEBUFFER, pressureGrid.write.fbo);
                 gl.drawArrays(gl.TRIANGLES, 0, 6);
                 pressureGrid.swap();
@@ -441,22 +444,18 @@
             gl.uniform1i(gl.getUniformLocation(gradSubProg, "uVelocity"), 0);
             gl.uniform1i(gl.getUniformLocation(gradSubProg, "uPressure"), 1);
             gl.uniform1i(gl.getUniformLocation(gradSubProg, "uObstacles"), 2);
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
-            gl.activeTexture(gl.TEXTURE1);
-            gl.bindTexture(gl.TEXTURE_2D, pressureGrid.read.tex);
+            gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
+            gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, pressureGrid.read.tex);
             gl.bindFramebuffer(gl.FRAMEBUFFER, velocityGrid.write.fbo);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             velocityGrid.swap();
 
-            // PASS F: Output to Viewport Screen
+            // PASS F: Volumetric Output to Viewport
             gl.viewport(0, 0, canvas.width, canvas.height);
             gl.useProgram(displayProg);
             gl.uniform1i(gl.getUniformLocation(displayProg, "uDensity"), 0);
             gl.uniform1i(gl.getUniformLocation(displayProg, "uObstacles"), 2);
-            gl.activeTexture(gl.TEXTURE0);
-            gl.bindTexture(gl.TEXTURE_2D, densityGrid.read.tex);
-            
+            gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, densityGrid.read.tex);
             gl.bindFramebuffer(gl.FRAMEBUFFER, null);
             gl.drawArrays(gl.TRIANGLES, 0, 6);
 
