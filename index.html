@@ -37,11 +37,6 @@
 </head>
 <body>
 
-    <div id="ui-overlay">
-        <h1>ATMOSPHERIC SIMULATION</h1>
-        <p>Region: MN / WI Border Area</p>
-    </div>
-
     <canvas id="simulation-canvas"></canvas>
 
 <script>
@@ -134,7 +129,8 @@
         uniform sampler2D uObstacles;
         uniform float uDt;
         uniform float uRdx;
-
+        uniform float uDissipation; // <--- New uniform: controls evaporation speed
+        
         void main() {
             float obstacle = texture(uObstacles, vUv).r;
             if (obstacle > 0.5) {
@@ -143,7 +139,9 @@
             }
             vec2 vel = texture(uVelocity, vUv).xy;
             vec2 coord = vUv - uDt * uRdx * vel;
-            fragColor = texture(uTarget, coord);
+            
+            // Decay the target density field over time
+            fragColor = texture(uTarget, coord) * uDissipation;
         }`;
 
     const divergeFs = `#version 300 es
