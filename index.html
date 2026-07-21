@@ -324,10 +324,11 @@
         gl.viewport(0, 0, SIM_RES, SIM_RES);
         gl.bindVertexArray(quadVa);
 
-        // PASS A: Advect Velocity Field
+        // PASS A: Advect Velocity Field (No dissipation for velocity)
         gl.useProgram(advectProg);
         gl.uniform1f(gl.getUniformLocation(advectProg, "uDt"), 0.016);
         gl.uniform1f(gl.getUniformLocation(advectProg, "uRdx"), 1.0);
+        gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 1.0); // Keep velocity moving
         gl.uniform1i(gl.getUniformLocation(advectProg, "uVelocity"), 0);
         gl.uniform1i(gl.getUniformLocation(advectProg, "uTarget"), 0);
         gl.uniform1i(gl.getUniformLocation(advectProg, "uObstacles"), 2);
@@ -340,11 +341,14 @@
         gl.bindFramebuffer(gl.FRAMEBUFFER, velocityGrid.write.fbo);
         gl.drawArrays(gl.TRIANGLES, 0, 6);
         velocityGrid.swap();
-
-        // PASS B: Advect Density
+    
+        // PASS B: Advect Density (Evaporate clouds slowly)
         gl.useProgram(advectProg);
+        // 0.992 causes clouds to dissolve cleanly after traveling away from sources
+        gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 0.992); 
         gl.uniform1i(gl.getUniformLocation(advectProg, "uVelocity"), 0);
         gl.uniform1i(gl.getUniformLocation(advectProg, "uTarget"), 1);
+        
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
         gl.activeTexture(gl.TEXTURE1);
@@ -352,22 +356,37 @@
         gl.bindFramebuffer(gl.FRAMEBUFFER, densityGrid.write.fbo);
         gl.drawArrays(gl.TRIANGLES, 0, 6);
         densityGrid.swap();
-
-        // Pass B.5: Safe Continuous Density Injection
-        if(Math.random() > 0.1) {
+    
+        // PASS B.5: Dynamic Cloud Puff Generation
+        if(Math.random() > 0.05) { // Slightly higher burst rate for clump formation
             gl.bindFramebuffer(gl.FRAMEBUFFER, densityGrid.read.fbo);
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.ONE, gl.ONE);
             
             gl.useProgram(injectProg);
-            gl.uniform1f(gl.getUniformLocation(injectProg, "uSeedY"), Math.random());
+            gl.uniform1f(gl.getUniformLocation(injectProg, "uSeedY"), Math.random() * 0.4 + 0.1); // Keep it lower on screen
             
-            gl.viewport(0, 0, 25, SIM_RES); 
+            gl.viewport(0, 0, 15, SIM_RES); 
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             
             gl.disable(gl.BLEND);
             gl.viewport(0, 0, SIM_RES, SIM_RES);
         }
+    
+        // NEW PASS B.7: Thermal Buoyancy Force Loop
+        gl.useProgram(buoyancyProg);
+        gl.uniform1f(gl.getUniformLocation(buoyancyProg, "uDt"), 0.016);
+        gl.uniform1i(gl.getUniformLocation(buoyancyProg, "uVelocity"), 0);
+        gl.uniform1i(gl.getUniformLocation(buoyancyProg, "uDensity"), 1);
+        
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, velocityGrid.read.tex);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, densityGrid.read.tex);
+        
+        gl.bindFramebuffer(gl.FRAMEBUFFER, velocityGrid.write.fbo);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        velocityGrid.swap();
 
         // PASS C: Compute Velocity Field Divergence
         gl.useProgram(divergeProg);
