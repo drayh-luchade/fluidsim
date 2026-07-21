@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Procedural Sky Cloud Simulation</title>
+    <title>Dynamic Natural Cloud Atmosphere</title>
     <style>
         * {
             margin: 0;
@@ -201,9 +201,9 @@
                 vec2 vel = texture(uVelocity, vUv).xy;
                 vel -= uHalfRdx * vec2(pR - pL, pT - pB);
                 
-                // Slow background ambient cross-breeze
+                // Keep an ambient constant baseline breeze moving from left to right globally
                 if (vUv.x < 0.01 || vUv.y < 0.01 || vUv.x > 0.99 || vUv.y > 0.99) {
-                    vel = vec2(0.4, 0.0); 
+                    vel = vec2(0.6, 0.05); 
                 }
 
                 fragColor = vec4(vel, 0.0, 1.0);
@@ -232,35 +232,19 @@
                 fragColor = vec4(finalColor, 1.0);
             }`;
 
+        // Localized point-injection shader for generating isolated atmospheric clusters
         const injectFs = `#version 300 es
             precision highp float;
             in vec2 vUv;
             out vec4 fragColor;
-            uniform float uTime;
-
-            float hash(vec2 p) {
-                return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
-            }
-
-            float noise(vec2 p) {
-                vec2 i = floor(p);
-                vec2 f = fract(p);
-                f = f * f * (3.0 - 2.0 * f);
-                return mix(mix(hash(i + vec2(0.0,0.0)), hash(i + vec2(1.0,0.0)), f.x),
-                           mix(hash(i + vec2(0.0,1.0)), hash(i + vec2(1.0,1.0)), f.x), f.y);
-            }
+            uniform vec2 uPointCenter;
+            uniform float uPointRadius;
+            uniform float uPointStrength;
 
             void main() {
-                vec2 uv1 = vUv * 5.0 + vec2(uTime * 0.05, 0.0);
-                vec2 uv2 = vUv * 12.0 - vec2(uTime * 0.02, uTime * 0.01);
-                
-                float cloudPattern = noise(uv1) * 0.7 + noise(uv2) * 0.3;
-                float density = smoothstep(0.55, 0.8, cloudPattern);
-                
-                // Keep cloud condensation mainly in the upper sky portions
-                density *= smoothstep(0.0, 0.35, vUv.y);
-                
-                fragColor = vec4(density * 0.08, 0.0, 0.0, 1.0);
+                float dist = length(vUv - uPointCenter);
+                float val = smoothstep(uPointRadius, 0.0, dist);
+                fragColor = vec4(val * uPointStrength, 0.0, 0.0, 1.0);
             }`;
 
         const buoyancyFs = `#version 300 es
@@ -274,7 +258,7 @@
             void main() {
                 vec2 vel = texture(uVelocity, vUv).xy;
                 float d = texture(uDensity, vUv).r;
-                float lift = d * 1.2; 
+                float lift = d * 1.4; 
                 fragColor = vec4(vel.x, vel.y + (lift * uDt), 0.0, 1.0);
             }`;
 
@@ -292,6 +276,7 @@
             let fbos = [];
             for (let i = 0; i < 2; i++) {
                 let tex = gl.createTexture();
+                gl.createTexture();
                 gl.bindTexture(gl.TEXTURE_2D, tex);
                 gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, SIM_RES, SIM_RES, 0, gl.RGBA, gl.HALF_FLOAT, null);
                 gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -358,7 +343,7 @@
             gl.useProgram(advectProg);
             gl.uniform1f(gl.getUniformLocation(advectProg, "uDt"), 0.016);
             gl.uniform1f(gl.getUniformLocation(advectProg, "uRdx"), 1.0);
-            gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 1.0); 
+            gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 0.998); // Tiny velocity drag
             gl.uniform1i(gl.getUniformLocation(advectProg, "uVelocity"), 0);
             gl.uniform1i(gl.getUniformLocation(advectProg, "uTarget"), 0);
             gl.uniform1i(gl.getUniformLocation(advectProg, "uObstacles"), 2);
@@ -372,9 +357,9 @@
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             velocityGrid.swap();
 
-            // PASS B: Advect Density (Dynamic Evaporation)
+            // PASS B: Advect Density (Evaporation framework)
             gl.useProgram(advectProg);
-            gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 0.993); 
+            gl.uniform1f(gl.getUniformLocation(advectProg, "uDissipation"), 0.991); // Clouds dissolve beautifully over time
             gl.uniform1i(gl.getUniformLocation(advectProg, "uVelocity"), 0);
             gl.uniform1i(gl.getUniformLocation(advectProg, "uTarget"), 1);
             
@@ -386,17 +371,28 @@
             gl.drawArrays(gl.TRIANGLES, 0, 6);
             densityGrid.swap();
 
-            // PASS B.5: PROCEDURAL SKY CLOUD CONDENSATION
-            gl.bindFramebuffer(gl.FRAMEBUFFER, densityGrid.read.fbo);
-            gl.viewport(0, 0, SIM_RES, SIM_RES); 
-            gl.enable(gl.BLEND);
-            gl.blendFunc(gl.ONE, gl.ONE);
-            
-            gl.useProgram(injectProg);
-            gl.uniform1f(gl.getUniformLocation(injectProg, "uTime"), performance.now() * 0.001);
-            
-            gl.drawArrays(gl.TRIANGLES, 0, 6);
-            gl.disable(gl.BLEND);
+            // PASS B.5: RANDOM SPATIAL ATMOSPHERIC CONDENSATION
+            // Instead of full-screen static noise, drop dynamic clusters at random frame beats
+            if (Math.random() > 0.88) {
+                gl.bindFramebuffer(gl.FRAMEBUFFER, densityGrid.read.fbo);
+                gl.enable(gl.BLEND);
+                gl.blendFunc(gl.ONE, gl.ONE);
+                
+                gl.useProgram(injectProg);
+                
+                // Choose an un-orchestrated spot anywhere in the upper portion of the canvas
+                const randX = Math.random() * 0.9 + 0.05;
+                const randY = Math.random() * 0.5 + 0.35;
+                const randRadius = Math.random() * 0.08 + 0.04;
+                const randStrength = Math.random() * 0.3 + 0.15;
+
+                gl.uniform2f(gl.getUniformLocation(injectProg, "uPointCenter"), randX, randY);
+                gl.uniform1f(gl.getUniformLocation(injectProg, "uPointRadius"), randRadius);
+                gl.uniform1f(gl.getUniformLocation(injectProg, "uPointStrength"), randStrength);
+                
+                gl.drawArrays(gl.TRIANGLES, 0, 6);
+                gl.disable(gl.BLEND);
+            }
 
             // PASS B.7: Apply Thermal Buoyancy Force
             gl.useProgram(buoyancyProg);
@@ -430,7 +426,7 @@
             gl.activeTexture(gl.TEXTURE3);
             gl.bindTexture(gl.TEXTURE_2D, divTex);
             
-            for (let i = 0; i < 24; i++) { 
+            for (let i = 0; i < 20; i++) { 
                 gl.uniform1i(gl.getUniformLocation(pressureProg, "uPressure"), 0);
                 gl.activeTexture(gl.TEXTURE0);
                 gl.bindTexture(gl.TEXTURE_2D, pressureGrid.read.tex);
